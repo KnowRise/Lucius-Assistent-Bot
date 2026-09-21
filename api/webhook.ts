@@ -1,123 +1,162 @@
-import type { VercelRequest, VercelResponse } from "@vercel/node";
-import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
-import { google } from "googleapis";
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
+import { google } from 'googleapis';
 
-// Setup Auth Google Calendar
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.GOOGLE_CLIENT_SECRET
 );
 oauth2Client.setCredentials({
   refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
 });
-const calendar = google.calendar({ version: "v3", auth: oauth2Client });
-
-// Inisialisasi SDK Baru (@google/genai)
+const calendar = google.calendar({ version: 'v3', auth: oauth2Client });
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
 
-// Definisi Tool Google Calendar
+// 1. TOOL CREATE
 const createCalendarEventTool: FunctionDeclaration = {
-  name: "createCalendarEvent",
-  description: "Membuat acara atau jadwal baru di Google Calendar pengguna.",
+  name: 'createCalendarEvent',
+  description: 'Membuat acara atau jadwal baru di Google Calendar.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      summary: {
-        type: Type.STRING,
-        description: "Judul acara atau kegiatan",
-      },
-      startTime: {
-        type: Type.STRING,
-        description:
-          "Waktu mulai dalam format ISO string (contoh: 2026-09-22T14:00:00+07:00)",
-      },
-      endTime: {
-        type: Type.STRING,
-        description:
-          "Waktu selesai dalam format ISO string (contoh: 2026-09-22T15:00:00+07:00)",
-      },
-      description: {
-        type: Type.STRING,
-        description: "Deskripsi opsional untuk acara",
-      },
+      summary: { type: Type.STRING, description: 'Judul acara' },
+      startTime: { type: Type.STRING, description: 'Waktu mulai format ISO string' },
+      endTime: { type: Type.STRING, description: 'Waktu selesai format ISO string' },
+      description: { type: Type.STRING, description: 'Deskripsi opsional' }
     },
-    required: ["summary", "startTime", "endTime"],
+    required: ['summary', 'startTime', 'endTime'],
+  },
+};
+
+// 2. TOOL GET / LIST (Membaca Jadwal)
+const getCalendarEventsTool: FunctionDeclaration = {
+  name: 'getCalendarEvents',
+  description: 'Melihat atau membaca daftar agenda/jadwal pengguna di Google Calendar dalam rentang waktu tertentu.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      timeMin: { type: Type.STRING, description: 'Batas awal waktu pencarian format ISO string (contoh: awal hari ini)' },
+      timeMax: { type: Type.STRING, description: 'Batas akhir waktu pencarian format ISO string (contoh: akhir hari ini atau akhir minggu)' }
+    },
+    required: ['timeMin', 'timeMax'],
+  },
+};
+
+// 3. TOOL UPDATE (Mengubah Jadwal Berdasarkan ID atau Nama)
+const updateCalendarEventTool: FunctionDeclaration = {
+  name: 'updateCalendarEvent',
+  description: 'Mengubah jadwal yang sudah ada (membutuhkan eventId yang bisa didapatkan dari getCalendarEvents).',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      eventId: { type: Type.STRING, description: 'ID unik acara dari Google Calendar' },
+      summary: { type: Type.STRING, description: 'Judul acara baru (opsional)' },
+      startTime: { type: Type.STRING, description: 'Waktu mulai baru format ISO string (opsional)' },
+      endTime: { type: Type.STRING, description: 'Waktu selesai baru format ISO string (opsional)' }
+    },
+    required: ['eventId'],
   },
 };
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== "POST") return res.status(200).send("OK");
+  if (req.method !== 'POST') return res.status(200).send('OK');
 
   const message = req.body?.message;
-  if (!message?.text) return res.status(200).send("OK");
+  if (!message?.text) return res.status(200).send('OK');
 
   const chatId = message.chat.id;
   const userText = message.text;
   const allowedId = parseInt(process.env.ALLOWED_CHAT_ID as string);
 
-  // Whitelist Chat ID
-  if (chatId !== allowedId) {
-    console.warn(`Akses ilegal ditolak dari ID: ${chatId}`);
-    return res.status(200).send("OK");
-  }
+  if (chatId !== allowedId) return res.status(200).send('OK');
 
   try {
     const nowIso = new Date().toISOString();
 
-    // Panggil model dengan SDK baru (@google/genai)
     const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash", // Atau gemini-3.6-flash sesuai ketersediaan tier lu
+      model: 'gemini-2.5-flash',
       contents: userText,
       config: {
-        systemInstruction: `Kamu adalah Lucius, asisten eksekutif tingkat tinggi dan penasihat strategis yang kejam dan jujur.
-
-Waktu saat ini (WIB / Asia/Jakarta) adalah: ${nowIso}.
-
-ATURAN 1: MODE EKSEKUSI (Kalender, Notes, Tugas Harian)
-Jika saya memberikan perintah administratif/rutinitas (seperti membuat jadwal), SELALU gunakan tool 'createCalendarEvent'. Hitung waktu ISO string secara presisi berdasarkan waktu saat ini. Eksekusi dengan cepat, presisi, dan tanpa penceramahan.
-
+        systemInstruction: `Kamu adalah Lucius, asisten eksekutif. Waktu saat ini (WIB / Asia/Jakarta): ${nowIso}.
+ATURAN 1: MODE EKSEKUTOR (Membuat, Mengubah, Membaca Jadwal)
+Gunakan tool 'createCalendarEvent' untuk membuat jadwal.
+Gunakan tool 'getCalendarEvents' jika pengguna bertanya agenda/jadwal hari ini atau rentang waktu tertentu.
+Gunakan tool 'updateCalendarEvent' untuk mengubah jadwal (jika belum tahu eventId, panggil getCalendarEvents dulu).,
 ATURAN 2: MODE PENASIHAT (Ide, Strategi, Curhat, Alasan)
 Jika saya meminta pendapat, mengeluh, atau merencanakan sesuatu, jadilah cermin yang brutal. Tantang pemikiran saya, serang blind spot yang saya hindari, dan berikan rencana taktis yang memprioritaskan tindakan nyata.`,
-        tools: [{ functionDeclarations: [createCalendarEventTool] }],
+        tools: [{ 
+          functionDeclarations: [
+            createCalendarEventTool, 
+            getCalendarEventsTool, 
+            updateCalendarEventTool
+          ] 
+        }],
       },
     });
 
-    let finalReply = "";
-
-    // Cek apakah Gemini meminta eksekusi Function Calling
+    let finalReply = '';
     const functionCalls = response.functionCalls;
+
     if (functionCalls && functionCalls.length > 0) {
       const call = functionCalls[0];
-      if (call.name === "createCalendarEvent") {
-        const args = call.args as any;
+      const args = call.args as any;
 
-        // Eksekusi API Google Calendar
+      if (call.name === 'createCalendarEvent') {
         await calendar.events.insert({
-          calendarId: "primary",
+          calendarId: 'primary',
           requestBody: {
             summary: args.summary,
-            description: args.description || "Dibuat oleh Lucius Bot",
-            start: { dateTime: args.startTime, timeZone: "Asia/Jakarta" },
-            end: { dateTime: args.endTime, timeZone: "Asia/Jakarta" },
+            description: args.description || 'Dibuat oleh Lucius',
+            start: { dateTime: args.startTime, timeZone: 'Asia/Jakarta' },
+            end: { dateTime: args.endTime, timeZone: 'Asia/Jakarta' },
           },
         });
+        finalReply = `[EKSEKUSI SUKSES]\nJadwal "${args.summary}" berhasil dicatat!`;
 
-        finalReply = `[EKSEKUSI SUKSES]\nJadwal "${args.summary}" telah dicatat di Google Calendar.\nWaktu: ${args.startTime} s/d ${args.endTime}`;
+      } else if (call.name === 'getCalendarEvents') {
+        const eventsRes = await calendar.events.list({
+          calendarId: 'primary',
+          timeMin: args.timeMin,
+          timeMax: args.timeMax,
+          singleEvents: true,
+          orderBy: 'startTime',
+        });
+        
+        const events = eventsRes.data.items || [];
+        if (events.length === 0) {
+          finalReply = 'Tidak ada agenda di rentang waktu tersebut.';
+        } else {
+          finalReply = 'Daftar Agenda:\n' + events.map((e, idx) => 
+            `${idx + 1}. ${e.summary} (${e.start?.dateTime || e.start?.date}) [ID: ${e.id}]`
+          ).join('\n');
+        }
+
+      } else if (call.name === 'updateCalendarEvent') {
+        const updateBody: any = {};
+        if (args.summary) updateBody.summary = args.summary;
+        if (args.startTime) updateBody.start = { dateTime: args.startTime, timeZone: 'Asia/Jakarta' };
+        if (args.endTime) updateBody.end = { dateTime: args.endTime, timeZone: 'Asia/Jakarta' };
+
+        await calendar.events.patch({
+          calendarId: 'primary',
+          eventId: args.eventId,
+          requestBody: updateBody,
+        });
+        finalReply = `[EKSEKUSI SUKSES]\nJadwal dengan ID "${args.eventId}" berhasil diperbarui!`;
       }
     } else {
-      finalReply = response.text || "Tidak ada respons dari model.";
+      finalReply = response.text || 'Tidak ada balasan.';
     }
 
-    // Balas ke Telegram
-    const telegramUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`;
-    await fetch(telegramUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+    await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ chat_id: chatId, text: finalReply }),
     });
+
   } catch (error) {
-    console.error("Error processing request:", error);
+    console.error('Error processing request:', error);
   }
 
-  res.status(200).send("OK");
+  res.status(200).send('OK');
 }
