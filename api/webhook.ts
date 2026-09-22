@@ -28,24 +28,24 @@ const createCalendarEventTool: FunctionDeclaration = {
   },
 };
 
-// 2. TOOL GET / LIST (Membaca Jadwal)
+// 2. TOOL GET / LIST
 const getCalendarEventsTool: FunctionDeclaration = {
   name: 'getCalendarEvents',
   description: 'Melihat atau membaca daftar agenda/jadwal pengguna di Google Calendar dalam rentang waktu tertentu.',
   parameters: {
     type: Type.OBJECT,
     properties: {
-      timeMin: { type: Type.STRING, description: 'Batas awal waktu pencarian format ISO string (contoh: awal hari ini)' },
-      timeMax: { type: Type.STRING, description: 'Batas akhir waktu pencarian format ISO string (contoh: akhir hari ini atau akhir minggu)' }
+      timeMin: { type: Type.STRING, description: 'Batas awal waktu pencarian format ISO string' },
+      timeMax: { type: Type.STRING, description: 'Batas akhir waktu pencarian format ISO string' }
     },
     required: ['timeMin', 'timeMax'],
   },
 };
 
-// 3. TOOL UPDATE (Mengubah Jadwal Berdasarkan ID atau Nama)
+// 3. TOOL UPDATE
 const updateCalendarEventTool: FunctionDeclaration = {
   name: 'updateCalendarEvent',
-  description: 'Mengubah jadwal yang sudah ada (membutuhkan eventId yang bisa didapatkan dari getCalendarEvents).',
+  description: 'Mengubah jadwal yang sudah ada berdasarkan eventId.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -53,6 +53,19 @@ const updateCalendarEventTool: FunctionDeclaration = {
       summary: { type: Type.STRING, description: 'Judul acara baru (opsional)' },
       startTime: { type: Type.STRING, description: 'Waktu mulai baru format ISO string (opsional)' },
       endTime: { type: Type.STRING, description: 'Waktu selesai baru format ISO string (opsional)' }
+    },
+    required: ['eventId'],
+  },
+};
+
+// 4. TOOL DELETE (Fitur Baru)
+const deleteCalendarEventTool: FunctionDeclaration = {
+  name: 'deleteCalendarEvent',
+  description: 'Menghapus acara atau jadwal dari Google Calendar berdasarkan eventId.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: {
+      eventId: { type: Type.STRING, description: 'ID unik acara dari Google Calendar yang akan dihapus' }
     },
     required: ['eventId'],
   },
@@ -77,18 +90,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       model: 'gemini-3.6-flash',
       contents: userText,
       config: {
-        systemInstruction: `Kamu adalah Lucius, asisten eksekutif. Waktu saat ini (WIB / Asia/Jakarta): ${nowIso}.
-ATURAN 1: MODE EKSEKUTOR (Membuat, Mengubah, Membaca Jadwal)
-Gunakan tool 'createCalendarEvent' untuk membuat jadwal.
-Gunakan tool 'getCalendarEvents' jika pengguna bertanya agenda/jadwal hari ini atau rentang waktu tertentu.
-Gunakan tool 'updateCalendarEvent' untuk mengubah jadwal (jika belum tahu eventId, panggil getCalendarEvents dulu).,
+        systemInstruction: `Kamu adalah Lucius, asisten eksekutif tingkat tinggi. Waktu saat ini (WIB / Asia/Jakarta): ${nowIso}.
+
+ATURAN 1: MODE EKSEKUTOR (Jadwal & Agenda)
+- Gunakan 'createCalendarEvent' untuk membuat jadwal baru.
+- Gunakan 'getCalendarEvents' untuk membaca agenda.
+- Gunakan 'updateCalendarEvent' untuk merubah jadwal.
+- Gunakan 'deleteCalendarEvent' untuk menghapus jadwal.
+*PENTING*: Jika pengguna minta mengubah atau menghapus jadwal tapi kamu BELUM tahu eventId-nya, panggil 'getCalendarEvents' terlebih dahulu untuk mencari jadwalnya dan mendapatkan eventId.
+
 ATURAN 2: MODE PENASIHAT (Ide, Strategi, Curhat, Alasan)
-Jika saya meminta pendapat, mengeluh, atau merencanakan sesuatu, jadilah cermin yang brutal. Tantang pemikiran saya, serang blind spot yang saya hindari, dan berikan rencana taktis yang memprioritaskan tindakan nyata.`,
+Jika pengguna meminta pendapat atau mengeluh, jadilah cermin yang brutal, bongkar blind spot, dan berikan strategi taktis tanpa basa-basi.`,
         tools: [{ 
           functionDeclarations: [
             createCalendarEventTool, 
             getCalendarEventsTool, 
-            updateCalendarEventTool
+            updateCalendarEventTool,
+            deleteCalendarEventTool
           ] 
         }],
       },
@@ -143,6 +161,13 @@ Jika saya meminta pendapat, mengeluh, atau merencanakan sesuatu, jadilah cermin 
           requestBody: updateBody,
         });
         finalReply = `[EKSEKUSI SUKSES]\nJadwal dengan ID "${args.eventId}" berhasil diperbarui!`;
+
+      } else if (call.name === 'deleteCalendarEvent') {
+        await calendar.events.delete({
+          calendarId: 'primary',
+          eventId: args.eventId,
+        });
+        finalReply = `[EKSEKUSI SUKSES]\nJadwal dengan ID "${args.eventId}" berhasil dihapus dari Google Calendar.`;
       }
     } else {
       finalReply = response.text || 'Tidak ada balasan.';
