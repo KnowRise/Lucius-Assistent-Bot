@@ -40,7 +40,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         systemInstruction: `Kamu adalah Lucius, asisten eksekutif tingkat tinggi. Waktu saat ini (WIB / Asia/Jakarta): ${nowIso}.
 
 ATURAN 1: MODE EKSEKUTOR
-- Kalender: Gunakan 'createCalendarEvent', 'getCalendarEvents', 'deleteCalendarEvent'.
+- Kalender: Gunakan 'createCalendarEvent', 'getCalendarEvents', 'updateCalendarEvent', 'deleteCalendarEvent'.
+*PENTING*: Jika pengguna minta mengubah atau menghapus jadwal/task tapi kamu BELUM tahu ID-nya, panggil 'getCalendarEvents' atau 'getNoteTasks' terlebih dahulu.
 - Task / Notes / Reminder: Gunakan 'createNoteTask' (untuk membuat), 'getNoteTasks' (untuk membaca), 'completeNoteTask' (untuk menandai selesai), 'deleteNoteTask' (untuk menghapus).
 *PENTING*: Jika pengguna minta menyelesaikan atau menghapus task tapi kamu BELUM tahu taskId-nya, panggil 'getNoteTasks' terlebih dahulu.
 
@@ -101,6 +102,23 @@ Jika pengguna meminta pendapat atau mengeluh, jadilah cermin yang brutal, bongka
                     `${idx + 1}. ${e.summary} (${e.start?.dateTime || e.start?.date}) [ID: ${e.id}]`,
                 )
                 .join("\n");
+      } else if (call.name === "updateCalendarEvent") {
+        const updateBody: any = {};
+        if (args.summary) updateBody.summary = args.summary;
+        if (args.startTime)
+          updateBody.start = {
+            dateTime: args.startTime,
+            timeZone: "Asia/Jakarta",
+          };
+        if (args.endTime)
+          updateBody.end = { dateTime: args.endTime, timeZone: "Asia/Jakarta" };
+
+        await calendar.events.patch({
+          calendarId: "primary",
+          eventId: args.eventId,
+          requestBody: updateBody,
+        });
+        finalReply = `[EKSEKUSI CALENDAR SUKSES]\nJadwal ID "${args.eventId}" berhasil diperbarui!`;
       } else if (call.name === "deleteCalendarEvent") {
         await calendar.events.delete({
           calendarId: "primary",
@@ -125,16 +143,21 @@ Jika pengguna meminta pendapat atau mengeluh, jadilah cermin yang brutal, bongka
           showCompleted: args.showCompleted || false,
         });
         const itemTasks = taskRes.data.items || [];
+
         finalReply =
           itemTasks.length === 0
             ? "Tidak ada tugas/catatan aktif."
             : "Daftar Tugas / Reminder:\n" +
               itemTasks
-                .map(
-                  (t, idx) =>
-                    `${idx + 1}. [${t.status === "completed" ? "X" : " "}] ${t.title} [ID: ${t.id}]`,
-                )
-                .join("\n");
+                .map((t, idx) => {
+                  const status = t.status === "completed" ? "X" : " ";
+                  const dueInfo = t.due
+                    ? ` (Tenggat: ${new Date(t.due).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })})`
+                    : " (Tanpa Tenggat)";
+                  const noteInfo = t.notes ? `\n   Note: ${t.notes}` : "";
+                  return `${idx + 1}. [${status}] ${t.title}${dueInfo}${noteInfo} [ID: ${t.id}]`;
+                })
+                .join("\n\n");
       } else if (call.name === "completeNoteTask") {
         await tasks.tasks.patch({
           tasklist: "@default",
